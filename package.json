@@ -1,0 +1,10 @@
+{
+  "name": "pi-jev-context-filter",
+  "version": "0.1.0",
+  "description": "Pi extension: filters noisy tool output (bash/grep/read) through TypeSafe's Jev before it hits context, using a typed hide/short/long/full visibility decision.",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions"]
+  }
+}
