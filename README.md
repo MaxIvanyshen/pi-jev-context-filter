@@ -15,7 +15,7 @@ The unfiltered original is always stashed to a temp file and recoverable via the
 ## Install
 
 ```bash
-pi install git:github.com/<you>/pi-jev-context-filter
+pi install git:github.com/MaxIvanyhen/pi-jev-context-filter
 ```
 
 Or locally:
