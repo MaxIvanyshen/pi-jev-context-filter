@@ -1,8 +1,8 @@
 import { complete, getModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
 // ponytail: filter only the tools that actually blow up context; add more if they show up hot
@@ -13,6 +13,18 @@ const FILTER_MODEL = { provider: "anthropic", id: "claude-haiku-4-5-20251001" };
 const MAX_SEEN_SUMMARIES = 10;
 const CHUNK_DIR = mkdtempSync(join(tmpdir(), "pi-context-filter-"));
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
+
+// ponytail: opt-in JSONL log for measuring jev accuracy — off by default, no cost when unset
+const DEBUG_LOG_PATH = process.env.JEV_DEBUG ? process.env.JEV_DEBUG_LOG ?? join(homedir(), ".jev-context-filter-debug.jsonl") : undefined;
+
+function debugLog(entry: Record<string, unknown>): void {
+  if (!DEBUG_LOG_PATH) return;
+  try {
+    appendFileSync(DEBUG_LOG_PATH, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n", "utf8");
+  } catch {
+    // best-effort logging, never break the tool over a disk error
+  }
+}
 
 type Visibility = "hide" | "short" | "long" | "full";
 
@@ -155,10 +167,14 @@ export default function (pi: ExtensionAPI) {
       (await jevVisibility({ taskGoal: state.taskGoal, recentIntent: recent, toolName: event.toolName, input: event.input, raw })) ??
       "long"; // ponytail: no TYPESAFE_API_KEY or API error — default to summarizing rather than dropping data
 
-    if (visibility === "full") return;
+    if (visibility === "full") {
+      debugLog({ event: "decision", visibility, toolName: event.toolName, lines: raw.split("\n").length, chars: raw.length });
+      return;
+    }
 
     const id = stashChunk(raw);
     const lineCount = raw.split("\n").length;
+    debugLog({ event: "decision", visibility, toolName: event.toolName, lines: lineCount, chars: raw.length, chunkId: id });
 
     if (visibility === "hide") {
       return { content: [{ type: "text", text: `[hidden as irrelevant, ${lineCount} lines — call expand_chunk("${id}") to see it]` }] };
@@ -183,6 +199,7 @@ export default function (pi: ExtensionAPI) {
     async execute(_id, params) {
       try {
         const raw = readFileSync(join(CHUNK_DIR, `${params.id}.txt`), "utf8");
+        debugLog({ event: "expand", chunkId: params.id });
         return { content: [{ type: "text", text: raw }], details: {} };
       } catch {
         return { content: [{ type: "text", text: `No stashed chunk with id ${params.id}` }], details: {}, isError: true };

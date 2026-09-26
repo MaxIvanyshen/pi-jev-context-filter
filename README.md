@@ -24,6 +24,25 @@ Or locally:
 ln -s $(pwd)/extensions/context-filter.ts ~/.pi/agent/extensions/context-filter.ts
 ```
 
+## Debug logging
+
+Set `JEV_DEBUG=1` to log every visibility decision (`hide`/`short`/`long`/`full`) and every
+`expand_chunk` call as JSONL to `~/.jev-context-filter-debug.jsonl` (override the path with
+`JEV_DEBUG_LOG`). Off by default — no disk writes, no overhead.
+
+Join the two event types on `chunkId` to measure jev's accuracy: a `hide` or `short` chunk
+that later gets `expand`ed is a signal the model needed context jev filtered out, versus the
+model just double-checking a `long`/`full` chunk out of habit.
+
+```bash
+jq -s '
+  group_by(.chunkId) |
+  map(select(length > 1 and (.[0].event == "decision"))) |
+  group_by(.[0].visibility) |
+  map({visibility: .[0][0].visibility, expanded: length})
+' ~/.jev-context-filter-debug.jsonl
+```
+
 ## Requirements
 
 - `TYPESAFE_API_KEY` env var — get one at [console.typesafe.ai/keys](https://console.typesafe.ai/keys).
