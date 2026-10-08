@@ -34,9 +34,9 @@ async function jevVisibility(args: {
   toolName: string;
   input: unknown;
   raw: string;
-}): Promise<Visibility | undefined> {
+}): Promise<{ visibility?: Visibility; detail: unknown }> {
   const apiKey = process.env.TYPESAFE_API_KEY;
-  if (!apiKey) return undefined;
+  if (!apiKey) return { detail: "no_api_key" };
 
   try {
     const res = await fetch(TYPESAFE_URL, {
@@ -65,11 +65,11 @@ async function jevVisibility(args: {
         },
       }),
     });
-    if (!res.ok) return undefined;
+    if (!res.ok) return { detail: `http_${res.status}` };
     const data = (await res.json()) as { answers: { visibility: { choice: Visibility } } };
-    return data.answers.visibility.choice;
-  } catch {
-    return undefined;
+    return { visibility: data.answers.visibility.choice, detail: data.answers.visibility };
+  } catch (err) {
+    return { detail: `error: ${String(err)}` };
   }
 }
 
@@ -163,18 +163,20 @@ export default function (pi: ExtensionAPI) {
     if (raw.length < CHAR_THRESHOLD && raw.split("\n").length < LINE_THRESHOLD) return;
 
     const recent = recentIntentOf(ctx);
+    const jev = await jevVisibility({ taskGoal: state.taskGoal, recentIntent: recent, toolName: event.toolName, input: event.input, raw });
+    const source = jev.visibility ? "jev" : "fallback";
     const visibility =
-      (await jevVisibility({ taskGoal: state.taskGoal, recentIntent: recent, toolName: event.toolName, input: event.input, raw })) ??
+      jev.visibility ??
       "long"; // ponytail: no TYPESAFE_API_KEY or API error — default to summarizing rather than dropping data
 
     if (visibility === "full") {
-      debugLog({ event: "decision", visibility, toolName: event.toolName, lines: raw.split("\n").length, chars: raw.length });
+      debugLog({ event: "decision", visibility, source, jev: jev.detail, command: JSON.stringify(event.input).slice(0, 200), toolName: event.toolName, lines: raw.split("\n").length, chars: raw.length });
       return;
     }
 
     const id = stashChunk(raw);
     const lineCount = raw.split("\n").length;
-    debugLog({ event: "decision", visibility, toolName: event.toolName, lines: lineCount, chars: raw.length, chunkId: id });
+    debugLog({ event: "decision", visibility, source, jev: jev.detail, command: JSON.stringify(event.input).slice(0, 200), toolName: event.toolName, lines: lineCount, chars: raw.length, chunkId: id });
 
     if (visibility === "hide") {
       return { content: [{ type: "text", text: `[hidden as irrelevant, ${lineCount} lines — call expand_chunk("${id}") to see it]` }] };
