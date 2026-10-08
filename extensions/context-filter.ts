@@ -26,6 +26,15 @@ function debugLog(entry: Record<string, unknown>): void {
   }
 }
 
+// same saved key the subagent decider uses (~/.pi/subagent-decider/typesafe-key)
+function savedKey(): string | undefined {
+  try {
+    return readFileSync(join(homedir(), ".pi", "subagent-decider", "typesafe-key"), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type Visibility = "hide" | "short" | "long" | "full";
 
 async function jevVisibility(args: {
@@ -35,7 +44,7 @@ async function jevVisibility(args: {
   input: unknown;
   raw: string;
 }): Promise<{ visibility?: Visibility; detail: unknown }> {
-  const apiKey = process.env.TYPESAFE_API_KEY;
+  const apiKey = process.env.TYPESAFE_API_KEY || process.env.JEV_API_KEY || savedKey();
   if (!apiKey) return { detail: "no_api_key" };
 
   try {
