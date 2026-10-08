@@ -5,9 +5,9 @@ A [pi](https://pi.dev) extension that filters noisy `bash`/`grep`/`read` output 
 
 Large tool output (over ~80 lines or 4000 chars) is sent to Jev as a `choice` question:
 how visible should this chunk be — `hide`, `short`, `long`, or `full` — given the task
-goal, recent conversation, and which tool/command produced it. Jev decides; a cheap
-model (Haiku) only spends tokens writing the actual summary when Jev says `short` or
-`long`. `full` passes through untouched, `hide` costs nothing beyond the Jev call.
+goal, recent conversation, and which tool/command produced it. `short` and `long` keep
+the first and last lines (10+5 or 40+20) with no extra model call, `full` passes through
+untouched, and `hide` drops it.
 
 The unfiltered original is always stashed to a temp file and recoverable via the
 `expand_chunk` tool, so nothing is ever permanently lost — just deprioritized.
@@ -46,9 +46,7 @@ jq -s '
 ## Requirements
 
 - `TYPESAFE_API_KEY` env var — get one at [console.typesafe.ai/keys](https://console.typesafe.ai/keys).
-  Without it, the extension falls back to always summarizing large output via Haiku
-  (no hide/full shortcuts, no Jev call).
-- Anthropic credentials configured in pi (used for the Haiku summarization pass).
+  Without it, large output always gets the `long` excerpt (no Jev call).
 
 ## Why
 

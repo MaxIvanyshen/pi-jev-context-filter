@@ -1,4 +1,3 @@
-import { complete, getModel } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { mkdtempSync, writeFileSync, readFileSync, appendFileSync } from "node:fs";
@@ -9,8 +8,8 @@ import { join } from "node:path";
 const FILTERED_TOOLS = new Set(["bash", "grep", "read"]);
 const LINE_THRESHOLD = 80;
 const CHAR_THRESHOLD = 4000;
-const FILTER_MODEL = { provider: "anthropic", id: "claude-haiku-4-5-20251001" };
-const MAX_SEEN_SUMMARIES = 10;
+// ponytail: head+tail cut instead of an LLM summary; expand_chunk has the rest
+const EXCERPT_LINES = { short: [10, 5], long: [40, 20] } as const;
 const CHUNK_DIR = mkdtempSync(join(tmpdir(), "pi-context-filter-"));
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 
@@ -66,8 +65,8 @@ async function jevVisibility(args: {
               "How visible should this tool output chunk be to the coding agent, given the task goal and recent intent?",
             criteria: {
               hide: "Irrelevant to the task goal and recent intent; safe to drop entirely",
-              short: "Marginally relevant; a one or two line gist is enough",
-              long: "Relevant; a detailed but partial summary is needed",
+              short: "Marginally relevant; a few lines from the start and end are enough",
+              long: "Relevant; a longer excerpt from the start and end is enough",
               full: "Directly needed for the next step; must be shown unmodified",
             },
           },
@@ -82,12 +81,7 @@ async function jevVisibility(args: {
   }
 }
 
-type State = {
-  taskGoal?: string;
-  seenSummaries: string[];
-};
-
-const state: State = { seenSummaries: [] };
+const state: { taskGoal?: string } = {};
 
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -113,57 +107,17 @@ function recentIntentOf(ctx: ExtensionContext): string {
     .join("\n");
 }
 
-async function summarize(
-  ctx: ExtensionContext,
-  raw: string,
-  toolName: string,
-  input: unknown,
-  recent: string,
-  visibility: "short" | "long",
-): Promise<string | undefined> {
-  const model = getModel(FILTER_MODEL.provider, FILTER_MODEL.id);
-  if (!model) return undefined;
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok || !auth.apiKey) return undefined;
-
-  const lengthHint = visibility === "short" ? "One or two lines, just the gist." : "A detailed but partial summary.";
-  const prompt = [
-    "You compress noisy tool output for a coding agent's context window.",
-    `Keep only what's relevant to the task and recent intent below. ${lengthHint}`,
-    "State how many lines you dropped at the end, e.g. '(dropped 1800 irrelevant lines)'.",
-    "",
-    `Task goal: ${state.taskGoal ?? "unknown"}`,
-    state.seenSummaries.length ? `Already shown this session:\n${state.seenSummaries.join("\n")}` : "",
-    `Recent turns:\n${recent}`,
-    `Tool: ${toolName} ${JSON.stringify(input).slice(0, 300)}`,
-    "",
-    "<tool_output>",
-    raw,
-    "</tool_output>",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  try {
-    const response = await complete(
-      model,
-      { messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }] },
-      { apiKey: auth.apiKey, headers: auth.headers },
-    );
-    return response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n");
-  } catch {
-    return undefined;
-  }
+function excerpt(raw: string, visibility: "short" | "long"): string {
+  const lines = raw.split("\n");
+  const [head, tail] = EXCERPT_LINES[visibility];
+  if (lines.length <= head + tail) return raw;
+  return [...lines.slice(0, head), `… ${lines.length - head - tail} lines omitted …`, ...lines.slice(-tail)].join("\n");
 }
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const first = ctx.sessionManager.getEntries().find((e) => e.type === "message" && e.message?.role === "user");
     state.taskGoal = first ? extractText(first.message!.content).slice(0, 300) : undefined;
-    state.seenSummaries = [];
   });
 
   pi.on("tool_result", async (event, ctx) => {
@@ -176,7 +130,7 @@ export default function (pi: ExtensionAPI) {
     const source = jev.visibility ? "jev" : "fallback";
     const visibility =
       jev.visibility ??
-      "long"; // ponytail: no TYPESAFE_API_KEY or API error — default to summarizing rather than dropping data
+      "long"; // ponytail: no TYPESAFE_API_KEY or API error — default to an excerpt rather than dropping data
 
     if (visibility === "full") {
       debugLog({ event: "decision", visibility, source, jev: jev.detail, command: JSON.stringify(event.input).slice(0, 200), toolName: event.toolName, lines: raw.split("\n").length, chars: raw.length });
@@ -191,11 +145,7 @@ export default function (pi: ExtensionAPI) {
       return { content: [{ type: "text", text: `[hidden as irrelevant, ${lineCount} lines — call expand_chunk("${id}") to see it]` }] };
     }
 
-    const summary = await summarize(ctx, raw, event.toolName, event.input, recent, visibility);
-    if (!summary) return;
-
-    const text = `${summary}\n\n[full output stashed, ${lineCount} lines — call expand_chunk("${id}") to see all]`;
-    state.seenSummaries = [...state.seenSummaries, summary.slice(0, 150)].slice(-MAX_SEEN_SUMMARIES);
+    const text = `${excerpt(raw, visibility)}\n\n[full output stashed, ${lineCount} lines — call expand_chunk("${id}") to see all]`;
 
     return { content: [{ type: "text", text }] };
   });
